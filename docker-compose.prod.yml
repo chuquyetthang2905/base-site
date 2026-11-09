@@ -1,0 +1,90 @@
+name: base-site-prod
+
+x-php-common: &php-common
+  image: base-site-app:prod
+  restart: always
+  env_file: ./backend/.env
+  security_opt:
+    - no-new-privileges:true
+  depends_on:
+    mysql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  app:
+    <<: *php-common
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      target: prod
+      args:
+        USER_ID: ${USER_ID:-1000}
+        GROUP_ID: ${GROUP_ID:-1000}
+    environment:
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-false}
+    volumes:
+      - app-storage:/var/www/html/storage
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      target: web-prod
+    image: base-site-web:prod
+    restart: always
+    ports:
+      - "${APP_PORT:-80}:80"
+    depends_on:
+      - app
+
+  queue:
+    <<: *php-common
+    pull_policy: never
+    user: app
+    command: php artisan queue:work --tries=3 --timeout=90 --max-time=3600
+    volumes:
+      - app-storage:/var/www/html/storage
+
+  scheduler:
+    <<: *php-common
+    pull_policy: never
+    user: app
+    command: php artisan schedule:work
+    volumes:
+      - app-storage:/var/www/html/storage
+
+  mysql:
+    image: mysql:8.4
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  app-storage:
+  mysql-data:
+  redis-data:
